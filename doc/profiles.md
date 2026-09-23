@@ -1,2 +1,2 @@
-This is a demo profile
-[demo name]
+This is temp 1 profile
+[Temp 1]
