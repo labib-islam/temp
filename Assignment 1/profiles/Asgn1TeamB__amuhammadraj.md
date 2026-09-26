@@ -1,0 +1,13 @@
+## Profile for Muhammad Sadiq
+
+| Category       | Skill Details | Competency                                                                                                                                          |
+|----------------|---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| Personal Name  | Muhammad Sadiq |                                                                                                                                                     |
+| Contact Info   | amuhammadraj@mun.ca  |                                                                                                                                                     |
+| Github Name    | Algorithman88 |                                                                                                                                                     |
+| Language       | Python, SQL, R        | Intermediate. I can perform data analysis using Python and R and have worked with libraries such as Pandas, NumPy, PyTorch, Matplotlib, and Scipy. I can write scripts and handle data manipulation. |
+| Web Frameworks | Flask, Bootstrap | Beginner. I have a basic understanding of Flask and Bootstrap for web development. I can build simple web applications and create basic, responsive layouts. I am eager to further develop my skills.                             |
+| Language       | JavaScript       | Beginner. I have a basic understanding of JavaScript for web development. I can work with basic syntax, functions, variables and even DOM manipulation. I would like to improve my skills.                           |
+| Database       | MySQL, SQL       | Intermediate. I can write SQL queries to retrieve, insert, update and delete data in databases. I can also perform basic joins, filtering, sorting and data aggregation.                                                       |
+| JavaScript Tools | Node.js, React | Beginner. I have a basic understanding of Node.js and React for server-side and frontend development. I am eager to build my skills in developing web applications using these technologies.                                                   |
+| Version Control | Git, Github | Beginner. I have a basic understanding of Git and GitHub for version control. I can create repositories but still understanding how to commit changes, work with branches or manage code through GitHub. I would like to improve my skills in these areas.                  |
