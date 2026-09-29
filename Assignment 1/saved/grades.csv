@@ -1,4 +1,4 @@
-OrgDefinedId,Username,Last Name,First Name,GitHub ID Text Grade <Text>,Team ID Text Grade <Text>,Assignment 1 Points Grade <Numeric MaxPoints:2 Weight:12.5 Category:Assignments CategoryWeight:16>,Feedback Text Grade <Text>,End-of-Line Indicator
+OrgDefinedId,Username,Last Name,First Name,GitHub ID Text Grade,Team ID Text Grade,Assignment 1 Points Grade,Feedback Text Grade,End-of-Line Indicator
 202037586,kyled,Dalton,Kyle,kedalton,B,2,"On time, correct branch, doc/profiles.md updated -- full marks.",#
 202092671,padejubu,Adejubu,Praise,femy4ever,L,2,"On time, correct branch, doc/profiles.md updated -- full marks.",#
 202095699,bnaik,Naik,Banipriya,banipriya940,C,2,"On time, correct branch, doc/profiles.md updated -- full marks.",#
@@ -71,4 +71,4 @@ OrgDefinedId,Username,Last Name,First Name,GitHub ID Text Grade <Text>,Team ID T
 202685089,mkaur26,.,Manpreet,New-Man-Coder,P,2,Branch name should have been 'mkaur26-asgn1'  instead of 'mkaur-asgn1' (expected format {munname}-asgn1).,#
 202685117,mroma,Roma,Mosh,tanjilaroma,P,2,"On time, correct branch, doc/profiles.md updated -- full marks.",#
 202685271,wlwinmoe,Lwin Moe,Wai,wailwinmoe,K,2,"On time, correct branch, doc/profiles.md updated -- full marks.",#
-202685362,mkhadka,Khadka,Margashi,margashikhadka123,A,1,Committed using a different github account than the one provided.,#
+202685362,mkhadka,Khadka,Margashi,margashikhadka123,A,2,Committed using a different github account than the one provided.,#

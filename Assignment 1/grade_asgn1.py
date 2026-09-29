@@ -4,43 +4,54 @@
 Automatic marking for Assignment 1 (branch + doc/profiles.md per student), 0/1/2 scale.
 
 Usage:
-  python grade_asgn1.py --org MY_ORG --roster roster.csv \
-      --deadline 2026-09-30T23:59:00-02:30 --out grades.csv \
-      [--template template_profiles.md]
+  python grade_asgn1.py --org MY_ORG --grades a1-grades.csv \
+      --deadline 2026-09-19T23:59:00-02:30 --out grades.csv
 
 ```
-python3 grade_asgn1.py --org COMP6905F26 --roster roster.csv \
-    --deadline 2026-09-19T23:59:00-02:30 --out grades.csv
+python3 grade_asgn1.py --org COMP6905F26 --grades a1-grades.csv
 ```
-roster.csv columns (header required):
-  repo,student,munname,github
+
+a1-grades.csv is the Brightspace/D2L grade-export CSV for this course. Required
+columns (matched by prefix, so exact MaxPoints/Weight/Category suffixes don't
+matter):
+  OrgDefinedId, Username, Last Name, First Name,
+  GitHub ID Text Grade <Text>, Team ID Text Grade <Text>,
+  Assignment 1 Points Grade <Numeric ...>, End-of-Line Indicator
+
+Username is the student's mun login name. Only a Team ID is provided (a single
+letter like "A"), so the team's repo name is derived as f"Asgn1Team{TeamID}".
 
 Requires the GitHub CLI (`gh auth login`) with read access to every team repo.
+
 Outputs:
-  grades.csv   one row per student: each check (True/False), mark (0/1/2), notes
-  profiles/    a copy of each student's profiles.md for manual review
+  grades.csv   same columns as a1-grades.csv, with "Assignment 1 Points Grade"
+               and a new "Feedback" column (inserted before End-of-Line
+               Indicator) filled in
+  profiles/    a copy of each student's doc/profiles.md for manual review
 
 Mark rules (edit final_mark() to change them):
-  2 = branch named {munname}-asgn1, authored by the student, doc/profiles.md
-      present with a filled-in profile, pushed on time
-  1 = something was submitted but at least one of those checks failed
-  0 = no correctly named branch, no doc/profiles.md, or file is the untouched template
+  Start at 2 (MaxPoints:2) and deduct 1 for each of these faults:
+    - no branch named {munname}-asgn1 in the team's repo
+    - no commit authored by the student on that branch before the deadline
+    - no commit authored by the student on that branch that touched
+      doc/profiles.md
+  A student with at least one on-time commit of theirs touching
+  doc/profiles.md on a correctly-named branch gets full marks (2).
 """
 import argparse
 import base64
 import csv
 import json
 import os
-import re
 import subprocess
 from datetime import datetime
 from urllib.parse import quote
 
-CHECKS = ["branch_name", "authorship", "file_path", "content", "on_time"]
+DEFAULT_DEADLINE = "2026-09-19T23:59:00-02:30"
 
 
 def check_gh_auth():
-    """Verify the GitHub CLI is authenticated before we run 60 API calls on faith."""
+    """Verify the GitHub CLI is authenticated before we run dozens of API calls on faith."""
     r = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(
@@ -89,155 +100,116 @@ def parse_time(s):
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def final_mark(res):
-    """Combine the pass/fail checks into 0/1/2."""
-    if not res["branch_name"] or not res["file_path"]:
-        return 0
-    if all(res.values()):
-        return 2
-    return 1
+def is_mine(commit, mun, gh_user):
+    a = commit["commit"]["author"]
+    login = ((commit.get("author") or {}).get("login") or "").lower()
+    return (
+        (gh_user and login == gh_user.lower())
+        or (mun.lower() in (a.get("email") or "").lower())
+        or (mun.lower() in (a.get("name") or "").lower())
+    )
 
 
-def check_student(org, row, deadline, template):
-    repo, mun, gh_user = row["repo"], row["munname"].strip(), row["github"].strip()
+def final_mark(branch_fault, on_time_fault, content_fault):
+    faults = sum([branch_fault, on_time_fault, content_fault])
+    return max(0, 2 - faults)
+
+
+def grade_student(org, repo, mun, gh_user, deadline):
     branch = f"{mun}-asgn1"
-    res = {k: False for k in CHECKS}
     notes = []
 
-    # 1. Branch exists with the exact name
-    info = gh_json(f"repos/{org}/{repo}/branches/{quote(branch)}")
-    if not info:
+    # 1. Branch exists with the exact expected name
+    branch_info = gh_json(f"repos/{org}/{repo}/branches/{quote(branch)}")
+    branch_fault = branch_info is None
+    if branch_fault:
         near = [b for b in gh_lines(f"repos/{org}/{repo}/branches", ".[].name")
                 if mun.lower() in b.lower()]
-        notes.append(
-            f"branch '{branch}' not found"
-            + (f"; similar branches: {', '.join(near)}" if near else "")
-        )
-        return res, notes, None
-    res["branch_name"] = True
+        msg = f"No branch named '{branch}' found (expected format {{munname}}-asgn1)."
+        if near:
+            msg += f" Did you mean: {', '.join(near)}?"
+        notes.append(msg)
 
-    # 2. On time (committer date is set client-side; see caveats)
-    last = parse_time(info["commit"]["commit"]["committer"]["date"])
-    if last <= deadline:
-        res["on_time"] = True
-    else:
-        notes.append(f"last commit {last.isoformat()} is after deadline")
-
-    # 3. Authorship of the commits that touched doc/profiles.md on this branch.
-    #    NOTE: this used to diff the branch against the default branch, but that
-    #    breaks the moment a PR gets merged (even though the brief says not to
-    #    open one) -- once merged, the branch is no longer "ahead" of anything,
-    #    the diff is empty, and authorship could never be verified. Walking the
-    #    file's own commit history on the branch works regardless of merge state.
-    commits = gh_json_array(
-        f"repos/{org}/{repo}/commits?sha={quote(branch)}&path=doc/profiles.md"
-    )
-    if not commits:
-        notes.append("no commit history found for doc/profiles.md on this branch")
-    else:
-        mine = 0
-        for c in commits:
-            a = c["commit"]["author"]
-            login = ((c.get("author") or {}).get("login") or "").lower()
-            if (login == gh_user.lower()
-                    or mun.lower() in a["email"].lower()
-                    or mun.lower() in a["name"].lower()):
-                mine += 1
-        if 0 < mine <= len(commits):
-            res["authorship"] = True
+    # 2. At least one commit authored by the student on that branch, before the deadline
+    on_time_fault = True
+    if not branch_fault:
+        commits = gh_json_array(f"repos/{org}/{repo}/commits?sha={quote(branch)}") or []
+        mine = [c for c in commits if is_mine(c, mun, gh_user)]
+        if not mine:
+            notes.append("No commit on that branch is authored by you "
+                         "(check that git is configured with your mun login name).")
         else:
-            notes.append(
-                f"only {mine}/{len(commits)} commits touching doc/profiles.md "
-                "attributed to student (note: a squash-merged PR may show the "
-                "merger, not the original author, as commit author -- check manually)"
+            on_time = [c for c in mine
+                       if parse_time(c["commit"]["committer"]["date"]) <= deadline]
+            if on_time:
+                on_time_fault = False
+            else:
+                notes.append("Your commits on that branch were all made after the deadline.")
+
+    # 3. At least one commit authored by the student that touched doc/profiles.md
+    content_fault = True
+    if not branch_fault:
+        profile_commits = gh_json_array(
+            f"repos/{org}/{repo}/commits?sha={quote(branch)}&path=doc/profiles.md"
+        ) or []
+        mine_profile = [c for c in profile_commits if is_mine(c, mun, gh_user)]
+        if mine_profile:
+            content_fault = False
+        else:
+            notes.append("No commit of yours on that branch touched doc/profiles.md.")
+
+    mark = final_mark(branch_fault, on_time_fault, content_fault)
+    if mark == 2:
+        notes.append("On time, correct branch, doc/profiles.md updated -- full marks.")
+
+    # Fetch the file (if any) for manual review, regardless of pass/fail
+    text = None
+    if not branch_fault:
+        f = gh_json(f"repos/{org}/{repo}/contents/doc/profiles.md?ref={quote(branch)}")
+        if f and "content" in f:
+            text = base64.b64decode(f["content"]).decode("utf-8", errors="replace")
+
+    return mark, " | ".join(notes), text
+
+
+REQUIRED_COLUMN_PREFIXES = {
+    "orgid": "OrgDefinedId",
+    "username": "Username",
+    "lastname": "Last Name",
+    "firstname": "First Name",
+    "github": "GitHub ID",
+    "teamid": "Team ID",
+    "grade": "Assignment 1 Points Grade",
+    "eol": "End-of-Line Indicator",
+}
+
+
+def resolve_columns(fieldnames):
+    cols = {}
+    for key, prefix in REQUIRED_COLUMN_PREFIXES.items():
+        match = next((c for c in fieldnames if c.startswith(prefix)), None)
+        if not match:
+            raise SystemExit(
+                f"ERROR: could not find a column starting with '{prefix}' in a1-grades.csv.\n"
+                f"Columns found: {list(fieldnames)}"
             )
-
-    # 4. doc/profiles.md on the branch
-    f = gh_json(f"repos/{org}/{repo}/contents/doc/profiles.md?ref={quote(branch)}")
-    if not f or "content" not in f:
-        notes.append("doc/profiles.md missing on branch")
-        return res, notes, None
-    text = base64.b64decode(f["content"]).decode("utf-8", errors="replace")
-    if template and text.strip() == template.strip():
-        notes.append("doc/profiles.md is identical to the template (treated as not submitted)")
-        return res, notes, text
-    res["file_path"] = True
-
-    # 5. Content sanity checks (structure only; quality is a manual/AI judgment)
-    lines = text.splitlines()
-    table_rows = [l for l in lines if re.match(r"^\s*\|.+\|\s*$", l)]
-    has_sep = any(re.match(r"^\s*\|?\s*:?-{3,}", l) for l in lines)
-    words = len(re.findall(r"\w+", text))
-    problems = []
-    if len(table_rows) < 2 or not has_sep:
-        problems.append("no markdown table")
-    if words < 40:
-        problems.append(f"very short ({words} words)")
-    if "<<<<<<<" in text:
-        problems.append("merge conflict markers")
-    if mun.lower() not in text.lower() and row["student"].split()[0].lower() not in text.lower():
-        problems.append("student name/login not found in file")
-    if problems:
-        notes.append("content: " + "; ".join(problems))
-    else:
-        res["content"] = True
-
-    # Informational: a PR was opened even though the brief said not to
-    prs = gh_json(f"repos/{org}/{repo}/pulls?state=all&head={org}:{quote(branch)}")
-    if prs:
-        notes.append("PR opened (brief said not to) -- informational")
-
-    return res, notes, text
+        cols[key] = match
+    return cols
 
 
-REQUIRED_ROSTER_COLUMNS = ["repo", "student", "munname", "github"]
-
-
-def open_roster(path):
+def open_grades(path):
     """Excel's 'CSV' export (as opposed to 'CSV UTF-8') often saves as
     Windows-1252, which breaks on curly quotes/apostrophes in names when read
-    as UTF-8. Try UTF-8 first (the correct case), fall back to cp1252.
-    Also sniffs the delimiter, since some regional Excel settings default to
-    semicolons instead of commas -- with the wrong delimiter, DictReader reads
-    the whole header line as one field and every row["repo"] lookup KeyErrors."""
+    as UTF-8. Try UTF-8 first (the correct case), fall back to cp1252."""
     for enc in ("utf-8-sig", "cp1252"):
         try:
             with open(path, newline="", encoding=enc) as fh:
-                sample = fh.read(4096)
-                fh.seek(0)
-                try:
-                    dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
-                except csv.Error:
-                    dialect = csv.excel  # comma-delimited default
-                rows = list(csv.DictReader(fh, dialect=dialect))
+                rows = list(csv.DictReader(fh))
             if enc != "utf-8-sig":
                 print(f"NOTE: {path} was not valid UTF-8; read it as {enc} instead. "
                       f"Consider re-saving it as 'CSV UTF-8' to avoid this.")
-            fieldnames = rows[0].keys() if rows else []
-            missing = [c for c in REQUIRED_ROSTER_COLUMNS if c not in fieldnames]
-            if missing:
-                raise SystemExit(
-                    f"ERROR: {path} is missing required column(s): {', '.join(missing)}.\n"
-                    f"Columns found: {list(fieldnames)}\n"
-                    f"Expected header: {','.join(REQUIRED_ROSTER_COLUMNS)}\n"
-                    "Check the delimiter (comma vs semicolon) and header spelling."
-                )
-            good, incomplete = [], []
-            for row in rows:
-                if not row["student"].strip() or not row["munname"].strip():
-                    incomplete.append(row)
-                else:
-                    good.append(row)
-            if incomplete:
-                print(f"WARNING: {len(incomplete)} roster row(s) have a blank 'student' "
-                      f"and/or 'munname' and will be SKIPPED (an empty munname is a "
-                      f"substring of everything, which risks false-positive authorship "
-                      f"matches -- better to skip than silently mis-grade):")
-                for row in incomplete:
-                    print(f"  repo={row['repo']!r} github={row['github']!r} "
-                          f"student={row['student']!r} munname={row['munname']!r}")
-                print()
-            return good
+            cols = resolve_columns(rows[0].keys() if rows else [])
+            return rows, cols
         except UnicodeDecodeError:
             continue
     raise SystemExit(f"ERROR: could not read {path} as UTF-8 or cp1252. Check its encoding.")
@@ -246,39 +218,52 @@ def open_roster(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--org", required=True)
-    ap.add_argument("--roster", required=True)
-    ap.add_argument("--deadline", required=True, help="ISO 8601 with UTC offset")
+    ap.add_argument("--grades", default="a1-grades.csv")
+    ap.add_argument("--deadline", default=DEFAULT_DEADLINE, help="ISO 8601 with UTC offset")
     ap.add_argument("--out", default="grades.csv")
-    ap.add_argument("--template")
     args = ap.parse_args()
 
     check_gh_auth()
 
     deadline = parse_time(args.deadline)
-    if args.template:
-        template = open(args.template).read()
-    else:
-        template = None
-        print(
-            "WARNING: no --template given. An untouched template file on a "
-            "student's branch will NOT be auto-detected as 'not submitted' -- "
-            "it will only be caught (maybe) by the word-count/table heuristics. "
-            "Review the 'content' notes and the profiles/ folder carefully.\n"
-        )
+    rows, cols = open_grades(args.grades)
     os.makedirs("profiles", exist_ok=True)
 
+    out_fields = [
+        cols["orgid"], cols["username"], cols["lastname"], cols["firstname"],
+        cols["github"], cols["teamid"], cols["grade"], "Feedback", cols["eol"],
+    ]
+
     with open(args.out, "w", newline="") as out:
-        w = csv.writer(out)
-        w.writerow(["repo", "student", "munname", *CHECKS, "mark_0_1_2", "notes"])
-        for row in open_roster(args.roster):
-            res, notes, text = check_student(args.org, row, deadline, template)
-            mark = final_mark(res)
-            w.writerow([row["repo"], row["student"], row["munname"],
-                        *[res[k] for k in CHECKS], mark, " | ".join(notes)])
+        w = csv.DictWriter(out, fieldnames=out_fields)
+        w.writeheader()
+        for row in rows:
+            mun = row[cols["username"]].strip()
+            gh_user = row[cols["github"]].strip()
+            team_id = row[cols["teamid"]].strip()
+            display = f"{row[cols['firstname']].strip()} {row[cols['lastname']].strip()}"
+
+            if not mun or not gh_user or not team_id:
+                mark, notes, text = 0, (
+                    "No GitHub ID and/or Team ID on file (quiz not completed) "
+                    "-- unable to locate a repository to grade."
+                ), None
+                repo = None
+            else:
+                repo = f"Asgn1Team{team_id}"
+                mark, notes, text = grade_student(args.org, repo, mun, gh_user, deadline)
+
+            row_out = dict(row)
+            row_out[cols["grade"]] = mark
+            row_out["Feedback"] = notes
+            row_out[cols["eol"]] = "#"
+            w.writerow({k: row_out.get(k, "") for k in out_fields})
+
             if text:
-                with open(f"profiles/{row['repo']}__{row['munname']}.md", "w") as p:
+                with open(f"profiles/{repo}__{mun}.md", "w") as p:
                     p.write(text)
-            print(f"{row['repo']:<20} {row['munname']:<12} mark={mark}  {' | '.join(notes)}")
+
+            print(f"{(repo or '-'):<16} {mun or display:<16} mark={mark}  {notes}")
 
 
 if __name__ == "__main__":
